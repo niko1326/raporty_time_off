@@ -3,6 +3,74 @@ import pandas as pd
 from weasyprint import HTML
 import io
 import zipfile
+import re
+
+# --- POMOCNICZE FUNKCJE DO PRZEKSZTAŁCANIA DAT NA JĘZYK POLSKI ---
+
+MONTHS_PL_GENITIVE = {
+    'jan': 'stycznia', 'feb': 'lutego', 'mar': 'marca', 'apr': 'kwietnia',
+    'may': 'maja', 'jun': 'czerwca', 'jul': 'lipca', 'aug': 'sierpnia',
+    'sep': 'września', 'oct': 'października', 'nov': 'listopada', 'dec': 'grudnia'
+}
+
+def clean_date_part(date_str, default_year=None):
+    """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty."""
+    date_str = re.sub(r'\s*\([^)]*\)', '', date_str).replace(',', '').strip()
+    parts = date_str.split()
+    
+    if len(parts) == 3: # np. ['28', 'Sep', '2026']
+        day, month, year = parts
+    elif len(parts) == 2: # np. ['28', 'Sep']
+        day, month = parts
+        year = default_year
+    else:
+        return date_str
+
+    day = day.zfill(2)
+    month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
+    
+    if year:
+        return f"{day} {month_pl} {year} r."
+    return f"{day} {month_pl}"
+
+def parse_english_period_to_pl(period_str):
+    """Parsuje zakresy i pojedyncze daty nieobecności z angielskiego na polski."""
+    if not isinstance(period_str, str) or not period_str.strip():
+        return period_str
+
+    clean_str = re.sub(r'\s*\([^)]*\)', '', period_str).strip()
+
+    if '-' in clean_str:
+        parts = clean_str.split('-')
+        start_part = parts[0].strip()
+        end_part = parts[1].strip()
+
+        year_match = re.search(r'\b(20\d{2})\b', end_part)
+        fallback_year = year_match.group(1) if year_match else None
+
+        start_year_match = re.search(r'\b(20\d{2})\b', start_part)
+        start_year = start_year_match.group(1) if start_year_match else fallback_year
+
+        start_pl = clean_date_part(start_part, default_year=start_year)
+        end_pl = clean_date_part(end_part, default_year=fallback_year)
+
+        return f"{start_pl} – {end_pl}"
+    else:
+        return clean_date_part(clean_str)
+
+def convert_single_date_to_pl(date_str):
+    """Konwersja daty utworzenia wniosku (np. '20 Aug, 2026' -> '20 sierpnia 2026')."""
+    if not isinstance(date_str, str):
+        return date_str
+    clean_str = date_str.replace(',', '').strip()
+    parts = clean_str.split()
+    if len(parts) == 3:
+        day, month, year = parts
+        month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
+        return f"{day.zfill(2)} {month_pl} {year}"
+    return date_str
+
+# --- MAIN STREAMLIT APPLICATION ---
 
 st.set_page_config(
     page_title="Generator Wniosków Urlopowych - SCIENTIA",
@@ -42,25 +110,21 @@ if uploaded_file is not None:
         else:
             df = pd.read_excel(uploaded_file)
 
-        # Czyszczenie nazw kolumn ze zbędnych spacji
         df.columns = df.columns.str.strip()
 
-        # ROZSZERZONA LOGIKA ROZPOZNAWANIA ZAAKCEPTOWANYCH WNIOSKÓW
+        # LOGIKA ROZPOZNAWANIA ZAAKCEPTOWANYCH WNIOSKÓW
         def is_approved(row):
             status = str(row.get('Status', '')).strip().upper()
             approved_by = str(row.get('Approved by', '')).strip()
 
-            # 1. Standardowy status APPROVED lub APPROVE_NOT_REQUIRED
             if status in ['APPROVED', 'APPROVE_NOT_REQUIRED']:
                 return True
             
-            # 2. Status PENDING, ale w kolumnie Approved by jest wpisana konkretna osoba (a nie "Automatically")
             if status == 'PENDING' and approved_by.lower() != 'automatically' and approved_by != '':
                 return True
 
             return False
 
-        # Przefiltrowanie zaakceptowanych wniosków
         df['IsApproved'] = df.apply(is_approved, axis=1)
         approved_df = df[df['IsApproved'] == True].copy().reset_index(drop=True)
 
@@ -69,7 +133,6 @@ if uploaded_file is not None:
 
             st.subheader("📋 Wybierz rekordy do wygenerowania:")
             
-            # Dodanie checkboxa
             approved_df.insert(0, "Wybierz", True)
             
             display_cols = ['Wybierz', 'Date created', 'Requester', 'Policy', 'Time off period', 'Status', 'Approved by', 'Notes']
@@ -82,7 +145,6 @@ if uploaded_file is not None:
                 use_container_width=True
             )
 
-            # Pobranie wybranej selekcji
             selected_rows = edited_df[edited_df["Wybierz"] == True]
 
             st.write(f"Zaznaczono rekordów: **{len(selected_rows)}** z **{len(approved_df)}**")
@@ -101,6 +163,10 @@ if uploaded_file is not None:
                                 approver = approver_raw if approver_raw.lower() != 'automatically' else "System (Automatycznie)"
                                 notes = str(row.get('Notes', '')) if pd.notna(row.get('Notes')) and str(row.get('Notes')).lower() != 'nan' else ""
                                 date_created = str(row.get('Date created', ''))
+
+                                # Konwersja dat na język polski
+                                period_pl = parse_english_period_to_pl(period_str)
+                                date_created_pl = convert_single_date_to_pl(date_created)
 
                                 notes_html = f"<br><br><em>Uwagi: {notes}</em>" if notes else ""
 
@@ -135,7 +201,7 @@ if uploaded_file is not None:
                                             <span style="font-size: 9pt; color: #555;">Imię i nazwisko pracownika</span>
                                         </td>
                                         <td class="date-info">
-                                            dnia {date_created} r.
+                                            dnia {date_created_pl} r.
                                         </td>
                                     </tr>
                                 </table>
@@ -144,7 +210,7 @@ if uploaded_file is not None:
 
                                 <div class="content-body">
                                     Proszę o udzielenie:<br>
-                                    <strong>Urlopu wypoczynkowego ({policy})</strong> w okresie: <strong>{period_str}</strong>.
+                                    <strong>Urlopu wypoczynkowego ({policy})</strong> w okresie: <strong>{period_pl}</strong>.
                                 </div>
 
                                 <div class="approval-note-box">
