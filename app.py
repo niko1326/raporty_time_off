@@ -5,8 +5,7 @@ import io
 import zipfile
 import re
 
-# --- POMOCNICZE FUNKCJE DO PRZEKSZTAŁCANIA DAT NA JĘZYK POLSKI ---
-
+# Słownik z polskimi miesiącami w dopełniaczu
 MONTHS_PL_GENITIVE = {
     'jan': 'stycznia', 'feb': 'lutego', 'mar': 'marca', 'apr': 'kwietnia',
     'may': 'maja', 'jun': 'czerwca', 'jul': 'lipca', 'aug': 'sierpnia',
@@ -15,12 +14,12 @@ MONTHS_PL_GENITIVE = {
 
 def clean_date_part(date_str, default_year=None):
     """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty."""
-    date_str = re.sub(r'\s*\([^)]*\)', '', date_str).replace(',', '').strip()
+    date_str = date_str.replace('(All day)', '').replace(',', '').strip()
     parts = date_str.split()
     
-    if len(parts) == 3: # np. ['28', 'Sep', '2026']
+    if len(parts) == 3:  # np. ['28', 'Sep', '2026']
         day, month, year = parts
-    elif len(parts) == 2: # np. ['28', 'Sep']
+    elif len(parts) == 2:  # np. ['28', 'Sep']
         day, month = parts
         year = default_year
     else:
@@ -34,7 +33,7 @@ def clean_date_part(date_str, default_year=None):
     return f"{day} {month_pl}"
 
 def parse_english_period_to_pl(period_str):
-    """Parsuje zakresy i pojedyncze daty nieobecności z angielskiego na polski."""
+    """Główna funkcja parsująca zakresy i pojedyncze daty nieobecności."""
     if not isinstance(period_str, str) or not period_str.strip():
         return period_str
 
@@ -59,7 +58,7 @@ def parse_english_period_to_pl(period_str):
         return clean_date_part(clean_str)
 
 def convert_single_date_to_pl(date_str):
-    """Konwersja daty utworzenia wniosku (np. '20 Aug, 2026' -> '20 sierpnia 2026')."""
+    """Konwersja daty utworzenia wniosku."""
     if not isinstance(date_str, str):
         return date_str
     clean_str = date_str.replace(',', '').strip()
@@ -70,7 +69,20 @@ def convert_single_date_to_pl(date_str):
         return f"{day.zfill(2)} {month_pl} {year}"
     return date_str
 
-# --- MAIN STREAMLIT APPLICATION ---
+def get_company_header(company_type):
+    """Zwraca nagłówek HTML dla wybranej spółki."""
+    if company_type == "SRI":
+        return """
+            <strong>SCIENTIA RESEARCH INSTITUTE Sp. z o.o.</strong><br>
+            ul. Michała Kleofasa Ogińskiego 2, 85-092 Bydgoszcz<br>
+            NIP: 9532779052 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; REGON: 387251647 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; KRS: 0000864098
+        """
+    else:  # Domyślnie CRO
+        return """
+            <strong>SCIENTIA CRO Sp. z o.o.</strong><br>
+            ul. Ogińskiego 2, 85-092 Bydgoszcz<br>
+            KRS 0000999674 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; NIP 9671460288 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; REGON 523240305
+        """
 
 st.set_page_config(
     page_title="Generator Wniosków Urlopowych - SCIENTIA",
@@ -79,29 +91,37 @@ st.set_page_config(
 )
 
 st.title("📄 Generator Wniosków Urlopowych - SCIENTIA")
-st.markdown("Wgraj plik raportu, wybierz wnioski z listy i wygeneruj gotowe PDF-y dla Kadr / PIP.")
+st.markdown("Wgraj pliki raportu oraz przypisania spółek, aby wygenerować spersonalizowane PDF-y.")
 
-# Wybór spółki
-company_option = st.selectbox(
-    "Wybierz spółkę dla generowanych wniosków:",
-    ["SCIENTIA CRO Sp. z o.o.", "SCIENTIA RESEARCH INSTITUTE Sp. z o.o."]
-)
+col1, col2 = st.columns(2)
 
-if company_option == "SCIENTIA CRO Sp. z o.o.":
-    company_header_html = """
-        <strong>SCIENTIA CRO Sp. z o.o.</strong><br>
-        ul. Ogińskiego 2, 85-092 Bydgoszcz<br>
-        KRS 0000999674 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; NIP 9671460288 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; REGON 523240305
-    """
-else:
-    company_header_html = """
-        <strong>SCIENTIA RESEARCH INSTITUTE Sp. z o.o.</strong><br>
-        ul. Michała Kleofasa Ogińskiego 2, 85-092 Bydgoszcz<br>
-        NIP: 9532779052 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; REGON: 387251647 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; KRS: 0000864098
-    """
+with col1:
+    uploaded_file = st.file_uploader("1. Wgraj raport urlopowy (.xlsx lub .csv)", type=["xlsx", "csv"])
 
-# Wgrywanie pliku
-uploaded_file = st.file_uploader("Wgraj plik raportu (.xlsx lub .csv)", type=["xlsx", "csv"])
+with col2:
+    company_mapping_file = st.file_uploader("2. [Opcjonalnie] Wgraj listę przynależności do spółek (.xlsx)", type=["xlsx"])
+
+city_input = st.text_input("Miejscowość wystawienia wniosku:", value="Bydgoszcz")
+
+# Przetwarzanie słownika spółek jeśli wgrano drugi plik
+company_map = {}
+if company_mapping_file is not None:
+    try:
+        mapping_df = pd.read_excel(company_mapping_file)
+        # Szukanie kolumn zawierających imię/nazwisko oraz spółkę
+        req_col = [c for c in mapping_df.columns if 'pracownik' in c.lower() or 'person' in c.lower() or 'requester' in c.lower() or 'imię' in c.lower()]
+        comp_col = [c for c in mapping_df.columns if 'spółka' in c.lower() or 'spolka' in c.lower() or 'company' in c.lower()]
+        
+        if req_col and comp_col:
+            for _, r in mapping_df.iterrows():
+                person = str(r[req_col[0]]).strip().lower()
+                comp = str(r[comp_col[0]]).strip()
+                company_map[person] = "SRI" if ("institute" in comp.lower() or "sri" in comp.lower() or "research" in comp.lower()) else "CRO"
+            st.info("Załadowano przypisania do spółek z pliku.")
+        else:
+            st.warning("Plik spółek wgrany, ale nie odnaleziono kolumn z pracownikiem/spółką. Domyślnie wygenerowane zostaną wnioski CRO.")
+    except Exception as e:
+        st.error(f"Błąd odczytu pliku spółek: {e}")
 
 if uploaded_file is not None:
     try:
@@ -112,17 +132,14 @@ if uploaded_file is not None:
 
         df.columns = df.columns.str.strip()
 
-        # LOGIKA ROZPOZNAWANIA ZAAKCEPTOWANYCH WNIOSKÓW
         def is_approved(row):
             status = str(row.get('Status', '')).strip().upper()
             approved_by = str(row.get('Approved by', '')).strip()
 
             if status in ['APPROVED', 'APPROVE_NOT_REQUIRED']:
                 return True
-            
             if status == 'PENDING' and approved_by.lower() != 'automatically' and approved_by != '':
                 return True
-
             return False
 
         df['IsApproved'] = df.apply(is_approved, axis=1)
@@ -164,7 +181,12 @@ if uploaded_file is not None:
                                 notes = str(row.get('Notes', '')) if pd.notna(row.get('Notes')) and str(row.get('Notes')).lower() != 'nan' else ""
                                 date_created = str(row.get('Date created', ''))
 
-                                # Konwersja dat na język polski
+                                # Ustalanie spółki dla pracownika
+                                requester_clean_key = requester.lower().strip()
+                                comp_type = company_map.get(requester_clean_key, "CRO")
+                                company_header_html = get_company_header(comp_type)
+
+                                # Konwersja dat
                                 period_pl = parse_english_period_to_pl(period_str)
                                 date_created_pl = convert_single_date_to_pl(date_created)
 
@@ -201,7 +223,7 @@ if uploaded_file is not None:
                                             <span style="font-size: 9pt; color: #555;">Imię i nazwisko pracownika</span>
                                         </td>
                                         <td class="date-info">
-                                            dnia {date_created_pl} r.
+                                            {city_input}, dnia {date_created_pl} r.
                                         </td>
                                     </tr>
                                 </table>
@@ -215,7 +237,7 @@ if uploaded_file is not None:
 
                                 <div class="approval-note-box">
                                     <strong>Adnotacja o zatwierdzeniu elektronicznym:</strong><br>
-                                    Dokument został wygenerowany automatycznie na podstawie danych z elektronicznego systemu wnioskowego.<br>
+                                    Dokument został wygenerowany automatycznie na podstawie danych z elektronicznego systemu wnioskowego z Trackingtime.<br>
                                     Wniosek został zaakceptowany przez: <strong>{approver}</strong>.
                                     {notes_html}
                                 </div>
