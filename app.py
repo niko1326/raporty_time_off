@@ -13,7 +13,7 @@ MONTHS_PL_GENITIVE = {
 }
 
 def clean_date_part(date_str, default_year=None):
-    """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty."""
+    """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty z twardymi spacjami."""
     date_str = date_str.replace('(All day)', '').replace(',', '').strip()
     parts = date_str.split()
     
@@ -28,12 +28,13 @@ def clean_date_part(date_str, default_year=None):
     day = day.zfill(2)
     month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
     
+    # Nierozdzielające spacje (\u00A0) zapobiegają łamaniu tekstu wewnątrz daty
     if year:
-        return f"{day} {month_pl} {year} r."
-    return f"{day} {month_pl}"
+        return f"{day}\u00A0{month_pl}\u00A0{year}\u00A0r."
+    return f"{day}\u00A0{month_pl}"
 
 def parse_english_period_to_pl(period_str):
-    """Główna funkcja parsująca zakresy i pojedyncze daty nieobecności."""
+    """Główna funkcja parsująca zakresy i pojedyncze daty nieobecności bez możliwości łamania wiersza."""
     if not isinstance(period_str, str) or not period_str.strip():
         return period_str
 
@@ -53,7 +54,7 @@ def parse_english_period_to_pl(period_str):
         start_pl = clean_date_part(start_part, default_year=start_year)
         end_pl = clean_date_part(end_part, default_year=fallback_year)
 
-        return f"{start_pl} – {end_pl}"
+        return f"{start_pl}\u00A0–\u00A0{end_pl}"
     else:
         return clean_date_part(clean_str)
 
@@ -66,7 +67,7 @@ def convert_single_date_to_pl(date_str):
     if len(parts) == 3:
         day, month, year = parts
         month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
-        return f"{day.zfill(2)} {month_pl} {year}"
+        return f"{day.zfill(2)}\u00A0{month_pl}\u00A0{year}"
     return date_str
 
 def get_company_header(company_type):
@@ -208,6 +209,9 @@ if uploaded_file is not None:
                                         .title {{ text-align: center; font-size: 16pt; font-weight: bold; margin: 40px 0 30px 0; text-transform: uppercase; }}
                                         .content-body {{ font-size: 11pt; margin-bottom: 50px; line-height: 1.8; }}
                                         .approval-note-box {{ margin-top: 60px; padding: 15px; border: 1px solid #a0aec0; background-color: #f7fafc; font-size: 10pt; line-height: 1.5; }}
+                                        
+                                        /* Zapobiega dzieleniu daty nieobecności na wiele wierszy */
+                                        .date-range {{ white-space: nowrap; }}
                                     </style>
                                 </head>
                                 <body>
@@ -232,7 +236,7 @@ if uploaded_file is not None:
 
                                 <div class="content-body">
                                     Proszę o udzielenie:<br>
-                                    <strong>Urlopu wypoczynkowego ({policy})</strong> w okresie: <strong>{period_pl}</strong>.
+                                    <strong>Urlopu wypoczynkowego ({policy})</strong> w okresie: <strong class="date-range">{period_pl}</strong>.
                                 </div>
 
                                 <div class="approval-note-box">
