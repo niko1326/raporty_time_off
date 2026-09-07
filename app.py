@@ -28,13 +28,12 @@ def clean_date_part(date_str, default_year=None):
     day = day.zfill(2)
     month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
     
-    # Nierozdzielające spacje (\u00A0) zapobiegają łamaniu tekstu wewnątrz daty
     if year:
         return f"{day}\u00A0{month_pl}\u00A0{year}\u00A0r."
     return f"{day}\u00A0{month_pl}"
 
 def parse_english_period_to_pl(period_str):
-    """Główna funkcja parsująca zakresy i pojedyncze daty nieobecności bez możliwości łamania wiersza."""
+    """Główna funkcja parsująca zakresy i pojedyncze daty nieobecności."""
     if not isinstance(period_str, str) or not period_str.strip():
         return period_str
 
@@ -86,30 +85,28 @@ def get_company_header(company_type):
         """
 
 st.set_page_config(
-    page_title="Generator Wniosków Urlopowych - SCIENTIA",
+    page_title="Generator Wniosków - SCIENTIA",
     page_icon="📄",
     layout="wide"
 )
 
-st.title("📄 Generator Wniosków Urlopowych - SCIENTIA")
+st.title("📄 Generator Wniosków Urlopowych i Pracy Zdalnej - SCIENTIA")
 st.markdown("Wgraj pliki raportu oraz przypisania spółek, aby wygenerować spersonalizowane PDF-y.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    uploaded_file = st.file_uploader("1. Wgraj raport urlopowy (.xlsx lub .csv)", type=["xlsx", "csv"])
+    uploaded_file = st.file_uploader("1. Wgraj raport nieobecności (.xlsx lub .csv)", type=["xlsx", "csv"])
 
 with col2:
     company_mapping_file = st.file_uploader("2. [Opcjonalnie] Wgraj listę przynależności do spółek (.xlsx)", type=["xlsx"])
 
 city_input = st.text_input("Miejscowość wystawienia wniosku:", value="Bydgoszcz")
 
-# Przetwarzanie słownika spółek jeśli wgrano drugi plik
 company_map = {}
 if company_mapping_file is not None:
     try:
         mapping_df = pd.read_excel(company_mapping_file)
-        # Szukanie kolumn zawierających imię/nazwisko oraz spółkę
         req_col = [c for c in mapping_df.columns if 'pracownik' in c.lower() or 'person' in c.lower() or 'requester' in c.lower() or 'imię' in c.lower()]
         comp_col = [c for c in mapping_df.columns if 'spółka' in c.lower() or 'spolka' in c.lower() or 'company' in c.lower()]
         
@@ -187,6 +184,17 @@ if uploaded_file is not None:
                                 comp_type = company_map.get(requester_clean_key, "CRO")
                                 company_header_html = get_company_header(comp_type)
 
+                                # Rozróżnienie urlopu od pracy zdalnej
+                                policy_lower = policy.lower()
+                                is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna'])
+
+                                if is_remote_work:
+                                    doc_title = "Wniosek o pracę zdalną"
+                                    request_text = f"Proszę o możliwość wykonywania pracy zdalnej (<strong>{policy}</strong>) w okresie:"
+                                else:
+                                    doc_title = "Wniosek o urlop"
+                                    request_text = f"Proszę o udzielenie:<br><strong>Urlopu wypoczynkowego ({policy})</strong> w okresie:"
+
                                 # Konwersja dat
                                 period_pl = parse_english_period_to_pl(period_str)
                                 date_created_pl = convert_single_date_to_pl(date_created)
@@ -204,13 +212,15 @@ if uploaded_file is not None:
                                         .header-company {{ font-size: 10pt; line-height: 1.4; margin-bottom: 40px; }}
                                         .employee-date-table {{ width: 100%; border-collapse: collapse; margin-bottom: 40px; }}
                                         .employee-date-table td {{ vertical-align: top; }}
-                                        .employee-info {{ width: 60%; }}
-                                        .date-info {{ width: 40%; text-align: right; }}
+                                        .employee-info {{ width: 50%; }}
+                                        
+                                        /* Zabezpieczenie daty w prawym górnym rogu przed zawijaniem */
+                                        .date-info {{ width: 50%; text-align: right; white-space: nowrap; }}
+                                        
                                         .title {{ text-align: center; font-size: 16pt; font-weight: bold; margin: 40px 0 30px 0; text-transform: uppercase; }}
                                         .content-body {{ font-size: 11pt; margin-bottom: 50px; line-height: 1.8; }}
                                         .approval-note-box {{ margin-top: 60px; padding: 15px; border: 1px solid #a0aec0; background-color: #f7fafc; font-size: 10pt; line-height: 1.5; }}
                                         
-                                        /* Zapobiega dzieleniu daty nieobecności na wiele wierszy */
                                         .date-range {{ white-space: nowrap; }}
                                     </style>
                                 </head>
@@ -227,16 +237,15 @@ if uploaded_file is not None:
                                             <span style="font-size: 9pt; color: #555;">Imię i nazwisko pracownika</span>
                                         </td>
                                         <td class="date-info">
-                                            {city_input}, dnia {date_created_pl} r.
+                                            {city_input},\u00A0dnia\u00A0{date_created_pl}\u00A0r.
                                         </td>
                                     </tr>
                                 </table>
 
-                                <div class="title">Wniosek o urlop</div>
+                                <div class="title">{doc_title}</div>
 
                                 <div class="content-body">
-                                    Proszę o udzielenie:<br>
-                                    <strong>Urlopu wypoczynkowego ({policy})</strong> w okresie: <strong class="date-range">{period_pl}</strong>.
+                                    {request_text} <strong class="date-range">{period_pl}</strong>.
                                 </div>
 
                                 <div class="approval-note-box">
@@ -252,14 +261,15 @@ if uploaded_file is not None:
 
                                 pdf_bytes = HTML(string=html_content).write_pdf()
                                 clean_name = requester.replace(" ", "_")
-                                filename = f"Wniosek_{clean_name}_{idx+1}.pdf"
+                                prefix = "Zdalna" if is_remote_work else "Wniosek"
+                                filename = f"{prefix}_{clean_name}_{idx+1}.pdf"
                                 
                                 zip_file.writestr(filename, pdf_bytes)
 
                     st.download_button(
                         label="📥 Pobierz wybraną selekcję (.ZIP)",
                         data=zip_buffer.getvalue(),
-                        file_name="Wnioski_Urlopowe_SCIENTIA.zip",
+                        file_name="Wnioski_SCIENTIA.zip",
                         mime="application/zip",
                         type="primary"
                     )
