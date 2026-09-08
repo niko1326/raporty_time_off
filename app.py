@@ -5,7 +5,23 @@ import io
 import zipfile
 import re
 
-# Słownik z polskimi miesiącami w dopełniaczu
+# Słownik do konwersji nazw miesięcy (skróty i pełne) na numery MM
+MONTHS_MAP = {
+    'jan': '01', 'january': '01',
+    'feb': '02', 'february': '02',
+    'mar': '03', 'march': '03',
+    'apr': '04', 'april': '04',
+    'may': '05',
+    'jun': '06', 'june': '06',
+    'jul': '07', 'july': '07',
+    'aug': '08', 'august': '08',
+    'sep': '09', 'september': '09',
+    'oct': '10', 'october': '10',
+    'nov': '11', 'november': '11',
+    'dec': '12', 'december': '12'
+}
+
+# Słownik z polskimi miesiącami w dopełniaczu (do treści dokumentu)
 MONTHS_PL_GENITIVE = {
     'jan': 'stycznia', 'feb': 'lutego', 'mar': 'marca', 'apr': 'kwietnia',
     'may': 'maja', 'jun': 'czerwca', 'jul': 'lipca', 'aug': 'sierpnia',
@@ -25,6 +41,8 @@ POLICY_TRANSLATIONS = {
     'home office': 'Praca zdalna',
     'remote work': 'Praca zdalna',
     'remote': 'Praca zdalna',
+    'workation': 'Workation (Praca zdalna)',
+    'personal leave': 'Urlop okolicznościowy',
     'compassionate leave': 'Urlop okolicznościowy',
     'child care': 'Opieka nad dzieckiem',
     'care leave': 'Urlop opiekuńczy',
@@ -101,8 +119,8 @@ def sanitize_filename(text):
     text = re.sub(r'[\\/*?:"<>|]', '', text)
     return text.replace(' ', '_').strip()
 
-def extract_clean_date_for_filename(period_str):
-    """Wyciąga skróconą datę pod kątem czystej nazwy pliku."""
+def extract_numeric_date_for_filename(period_str):
+    """Przekształca angielską datę (np. 28 Sep 2026) na cyfrowy format YYYY-MM-DD."""
     if not isinstance(period_str, str):
         return "brak-daty"
     
@@ -112,9 +130,10 @@ def extract_clean_date_for_filename(period_str):
     
     if len(parts) >= 2:
         day = parts[0].zfill(2)
-        month = parts[1]
-        year = parts[2] if len(parts) == 3 else ""
-        return f"{year}_{month}_{day}".strip('_')
+        month_str = parts[1].lower()[:3]
+        month_num = MONTHS_MAP.get(month_str, "01")
+        year = parts[2] if len(parts) == 3 else "2026"
+        return f"{year}-{month_num}-{day}"
     
     return sanitize_filename(first_date)
 
@@ -228,7 +247,7 @@ if uploaded_file is not None:
                                 notes = str(row.get('Notes', '')) if pd.notna(row.get('Notes')) and str(row.get('Notes')).lower() != 'nan' else ""
                                 date_created = str(row.get('Date created', ''))
 
-                                # Tłumaczenie nieobecności na język polski
+                                # Tłumaczenie nieobecności
                                 policy_pl = translate_policy(raw_policy)
 
                                 # Ustalanie spółki dla pracownika
@@ -236,13 +255,13 @@ if uploaded_file is not None:
                                 comp_type = company_map.get(requester_clean_key, "CRO")
                                 company_header_html = get_company_header(comp_type)
 
-                                # Rozróżnienie urlopu / nieobecności od pracy zdalnej
+                                # Rozróżnienie urlopu od pracy zdalnej / workation
                                 policy_lower = raw_policy.lower()
-                                is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna'])
+                                is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna', 'workation'])
 
                                 if is_remote_work:
                                     doc_title = "Wniosek o pracę zdalną"
-                                    request_text = f"Proszę o możliwość wykonywania <strong>pracy zdalnej</strong> w okresie:"
+                                    request_text = f"Proszę o możliwość wykonywania <strong>pracy zdalnej ({policy_pl})</strong> w okresie:"
                                     type_prefix = "PracaZdalna"
                                 else:
                                     doc_title = f"Wniosek – {policy_pl}"
@@ -314,11 +333,11 @@ if uploaded_file is not None:
 
                                 pdf_bytes = HTML(string=html_content).write_pdf()
 
-                                # Nazewnictwo plików: [Spółka]_[PolskiTyp]_[Nazwisko_Imię]_[Data].pdf
+                                # Nazewnictwo plików: [Spółka]_[Typ]_[Nazwisko_Imię]_[YYYY-MM-DD].pdf
                                 clean_person = sanitize_filename(requester)
-                                date_short = extract_clean_date_for_filename(period_str)
+                                date_num = extract_numeric_date_for_filename(period_str)
                                 
-                                filename = f"{comp_type}_{type_prefix}_{clean_person}_{date_short}.pdf"
+                                filename = f"{comp_type}_{type_prefix}_{clean_person}_{date_num}.pdf"
                                 
                                 zip_file.writestr(filename, pdf_bytes)
 
