@@ -12,6 +12,33 @@ MONTHS_PL_GENITIVE = {
     'sep': 'września', 'oct': 'października', 'nov': 'listopada', 'dec': 'grudnia'
 }
 
+# Słownik tłumaczeń rodzajów nieobecności z angielskiego na polski
+POLICY_TRANSLATIONS = {
+    'holidays': 'Urlop wypoczynkowy',
+    'vacation': 'Urlop wypoczynkowy',
+    'annual leave': 'Urlop wypoczynkowy',
+    'maternity leave': 'Urlop macierzyński',
+    'paternity leave': 'Urlop ojcostwa',
+    'parental leave': 'Urlop rodzicielski',
+    'sick leave': 'Zwolnienie lekarskie',
+    'unpaid leave': 'Urlop bezpłatny',
+    'home office': 'Praca zdalna',
+    'remote work': 'Praca zdalna',
+    'remote': 'Praca zdalna',
+    'compassionate leave': 'Urlop okolicznościowy',
+    'child care': 'Opieka nad dzieckiem',
+    'care leave': 'Urlop opiekuńczy',
+    'force majeure': 'Zwolnienie od pracy z powodu siły wyższej'
+}
+
+def translate_policy(policy_str):
+    """Przekształca angielską nazwę polityki na poprawną polską."""
+    if not isinstance(policy_str, str) or not policy_str.strip():
+        return "Urlop wypoczynkowy"
+    
+    clean_policy = policy_str.strip().lower()
+    return POLICY_TRANSLATIONS.get(clean_policy, policy_str.strip())
+
 def clean_date_part(date_str, default_year=None):
     """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty z twardymi spacjami."""
     date_str = date_str.replace('(All day)', '').replace(',', '').strip()
@@ -68,6 +95,28 @@ def convert_single_date_to_pl(date_str):
         month_pl = MONTHS_PL_GENITIVE.get(month.lower()[:3], month)
         return f"{day.zfill(2)}\u00A0{month_pl}\u00A0{year}"
     return date_str
+
+def sanitize_filename(text):
+    """Usuwa niedozwolone znaki z nazw plików."""
+    text = re.sub(r'[\\/*?:"<>|]', '', text)
+    return text.replace(' ', '_').strip()
+
+def extract_clean_date_for_filename(period_str):
+    """Wyciąga skróconą datę pod kątem czystej nazwy pliku."""
+    if not isinstance(period_str, str):
+        return "brak-daty"
+    
+    clean_str = period_str.replace('(All day)', '').replace(',', '').strip()
+    first_date = clean_str.split('-')[0].strip()
+    parts = first_date.split()
+    
+    if len(parts) >= 2:
+        day = parts[0].zfill(2)
+        month = parts[1]
+        year = parts[2] if len(parts) == 3 else ""
+        return f"{year}_{month}_{day}".strip('_')
+    
+    return sanitize_filename(first_date)
 
 def get_company_header(company_type):
     """Zwraca nagłówek HTML dla wybranej spółki."""
@@ -172,28 +221,33 @@ if uploaded_file is not None:
                         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                             for idx, row in selected_rows.iterrows():
                                 requester = str(row.get('Requester', '')).replace("By ", "").strip()
-                                policy = str(row.get('Policy', 'Holidays'))
+                                raw_policy = str(row.get('Policy', 'Holidays'))
                                 period_str = str(row.get('Time off period', ''))
                                 approver_raw = str(row.get('Approved by', '')).replace("By ", "").strip()
                                 approver = approver_raw if approver_raw.lower() != 'automatically' else "System (Automatycznie)"
                                 notes = str(row.get('Notes', '')) if pd.notna(row.get('Notes')) and str(row.get('Notes')).lower() != 'nan' else ""
                                 date_created = str(row.get('Date created', ''))
 
+                                # Tłumaczenie nieobecności na język polski
+                                policy_pl = translate_policy(raw_policy)
+
                                 # Ustalanie spółki dla pracownika
                                 requester_clean_key = requester.lower().strip()
                                 comp_type = company_map.get(requester_clean_key, "CRO")
                                 company_header_html = get_company_header(comp_type)
 
-                                # Rozróżnienie urlopu od pracy zdalnej
-                                policy_lower = policy.lower()
+                                # Rozróżnienie urlopu / nieobecności od pracy zdalnej
+                                policy_lower = raw_policy.lower()
                                 is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna'])
 
                                 if is_remote_work:
                                     doc_title = "Wniosek o pracę zdalną"
-                                    request_text = f"Proszę o możliwość wykonywania pracy zdalnej (<strong>{policy}</strong>) w okresie:"
+                                    request_text = f"Proszę o możliwość wykonywania <strong>pracy zdalnej</strong> w okresie:"
+                                    type_prefix = "PracaZdalna"
                                 else:
-                                    doc_title = "Wniosek o urlop"
-                                    request_text = f"Proszę o udzielenie:<br><strong>Urlopu wypoczynkowego ({policy})</strong> w okresie:"
+                                    doc_title = f"Wniosek – {policy_pl}"
+                                    request_text = f"Proszę o udzielenie:<br><strong>{policy_pl}</strong> w okresie:"
+                                    type_prefix = sanitize_filename(policy_pl)
 
                                 # Konwersja dat
                                 period_pl = parse_english_period_to_pl(period_str)
@@ -214,7 +268,6 @@ if uploaded_file is not None:
                                         .employee-date-table td {{ vertical-align: top; }}
                                         .employee-info {{ width: 50%; }}
                                         
-                                        /* Zabezpieczenie daty w prawym górnym rogu przed zawijaniem */
                                         .date-info {{ width: 50%; text-align: right; white-space: nowrap; }}
                                         
                                         .title {{ text-align: center; font-size: 16pt; font-weight: bold; margin: 40px 0 30px 0; text-transform: uppercase; }}
@@ -260,9 +313,12 @@ if uploaded_file is not None:
                                 """
 
                                 pdf_bytes = HTML(string=html_content).write_pdf()
-                                clean_name = requester.replace(" ", "_")
-                                prefix = "Zdalna" if is_remote_work else "Wniosek"
-                                filename = f"{prefix}_{clean_name}_{idx+1}.pdf"
+
+                                # Nazewnictwo plików: [Spółka]_[PolskiTyp]_[Nazwisko_Imię]_[Data].pdf
+                                clean_person = sanitize_filename(requester)
+                                date_short = extract_clean_date_for_filename(period_str)
+                                
+                                filename = f"{comp_type}_{type_prefix}_{clean_person}_{date_short}.pdf"
                                 
                                 zip_file.writestr(filename, pdf_bytes)
 
