@@ -5,57 +5,12 @@ import io
 import zipfile
 import re
 
-# Słownik do konwersji nazw miesięcy (skróty i pełne) na numery MM
-MONTHS_MAP = {
-    'jan': '01', 'january': '01',
-    'feb': '02', 'february': '02',
-    'mar': '03', 'march': '03',
-    'apr': '04', 'april': '04',
-    'may': '05',
-    'jun': '06', 'june': '06',
-    'jul': '07', 'july': '07',
-    'aug': '08', 'august': '08',
-    'sep': '09', 'september': '09',
-    'oct': '10', 'october': '10',
-    'nov': '11', 'november': '11',
-    'dec': '12', 'december': '12'
-}
-
-# Słownik z polskimi miesiącami w dopełniaczu (do treści dokumentu)
+# Słownik z polskimi miesiącami w dopełniaczu
 MONTHS_PL_GENITIVE = {
     'jan': 'stycznia', 'feb': 'lutego', 'mar': 'marca', 'apr': 'kwietnia',
     'may': 'maja', 'jun': 'czerwca', 'jul': 'lipca', 'aug': 'sierpnia',
     'sep': 'września', 'oct': 'października', 'nov': 'listopada', 'dec': 'grudnia'
 }
-
-# Słownik tłumaczeń rodzajów nieobecności z angielskiego na polski
-POLICY_TRANSLATIONS = {
-    'holidays': 'Urlop wypoczynkowy',
-    'vacation': 'Urlop wypoczynkowy',
-    'annual leave': 'Urlop wypoczynkowy',
-    'maternity leave': 'Urlop macierzyński',
-    'paternity leave': 'Urlop ojcostwa',
-    'parental leave': 'Urlop rodzicielski',
-    'sick leave': 'Zwolnienie lekarskie',
-    'unpaid leave': 'Urlop bezpłatny',
-    'home office': 'Praca zdalna',
-    'remote work': 'Praca zdalna',
-    'remote': 'Praca zdalna',
-    'workation': 'Workation (Praca zdalna)',
-    'personal leave': 'Urlop okolicznościowy',
-    'compassionate leave': 'Urlop okolicznościowy',
-    'child care': 'Opieka nad dzieckiem',
-    'care leave': 'Urlop opiekuńczy',
-    'force majeure': 'Zwolnienie od pracy z powodu siły wyższej'
-}
-
-def translate_policy(policy_str):
-    """Przekształca angielską nazwę polityki na poprawną polską."""
-    if not isinstance(policy_str, str) or not policy_str.strip():
-        return "Urlop wypoczynkowy"
-    
-    clean_policy = policy_str.strip().lower()
-    return POLICY_TRANSLATIONS.get(clean_policy, policy_str.strip())
 
 def clean_date_part(date_str, default_year=None):
     """Pomocnicza funkcja czyszcząca i tłumacząca pojedynczy fragment daty z twardymi spacjami."""
@@ -119,8 +74,8 @@ def sanitize_filename(text):
     text = re.sub(r'[\\/*?:"<>|]', '', text)
     return text.replace(' ', '_').strip()
 
-def extract_numeric_date_for_filename(period_str):
-    """Przekształca angielską datę (np. 28 Sep 2026) na cyfrowy format YYYY-MM-DD."""
+def extract_clean_date_for_filename(period_str):
+    """Wyciąga skróconą datę pod kątem czystej nazwy pliku."""
     if not isinstance(period_str, str):
         return "brak-daty"
     
@@ -130,10 +85,9 @@ def extract_numeric_date_for_filename(period_str):
     
     if len(parts) >= 2:
         day = parts[0].zfill(2)
-        month_str = parts[1].lower()[:3]
-        month_num = MONTHS_MAP.get(month_str, "01")
-        year = parts[2] if len(parts) == 3 else "2026"
-        return f"{year}-{month_num}-{day}"
+        month = parts[1]
+        year = parts[2] if len(parts) == 3 else ""
+        return f"{year}_{month}_{day}".strip('_')
     
     return sanitize_filename(first_date)
 
@@ -216,16 +170,34 @@ if uploaded_file is not None:
 
             st.subheader("📋 Wybierz rekordy do wygenerowania:")
             
-            approved_df.insert(0, "Wybierz", True)
-            
-            display_cols = ['Wybierz', 'Date created', 'Requester', 'Policy', 'Time off period', 'Status', 'Approved by', 'Notes']
+            # Inicjalizacja stanu zaznaczenia w session_state
+            if "select_all_state" not in st.session_state:
+                st.session_state.select_all_state = True
+
+            # Przycisk sterujący masowym zaznaczaniem / odzaznaczaniem
+            btn_col1, btn_col2, _ = st.columns([1.5, 1.5, 7])
+            with btn_col1:
+                if st.button("✅ Zaznacz wszystkie", use_container_width=True):
+                    st.session_state.select_all_state = True
+                    st.rerun()
+            with btn_col2:
+                if st.button("❌ Odzaznacz wszystkie", use_container_width=True):
+                    st.session_state.select_all_state = False
+                    st.rerun()
+
+            display_cols = ['Date created', 'Requester', 'Policy', 'Time off period', 'Status', 'Approved by', 'Notes']
             available_cols = [col for col in display_cols if col in approved_df.columns]
+            
+            # Przypisanie aktualnego stanu do kolumny 'Wybierz'
+            data_to_edit = approved_df[available_cols].copy()
+            data_to_edit.insert(0, "Wybierz", st.session_state.select_all_state)
 
             edited_df = st.data_editor(
-                approved_df[available_cols],
+                data_to_edit,
                 disabled=[col for col in available_cols if col != 'Wybierz'],
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                key="data_editor_widget"
             )
 
             selected_rows = edited_df[edited_df["Wybierz"] == True]
@@ -240,35 +212,29 @@ if uploaded_file is not None:
                         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                             for idx, row in selected_rows.iterrows():
                                 requester = str(row.get('Requester', '')).replace("By ", "").strip()
-                                raw_policy = str(row.get('Policy', 'Holidays'))
+                                policy = str(row.get('Policy', 'Holidays'))
                                 period_str = str(row.get('Time off period', ''))
                                 approver_raw = str(row.get('Approved by', '')).replace("By ", "").strip()
                                 approver = approver_raw if approver_raw.lower() != 'automatically' else "System (Automatycznie)"
                                 notes = str(row.get('Notes', '')) if pd.notna(row.get('Notes')) and str(row.get('Notes')).lower() != 'nan' else ""
                                 date_created = str(row.get('Date created', ''))
 
-                                # Tłumaczenie nieobecności
-                                policy_pl = translate_policy(raw_policy)
-
-                                # Ustalanie spółki dla pracownika
                                 requester_clean_key = requester.lower().strip()
                                 comp_type = company_map.get(requester_clean_key, "CRO")
                                 company_header_html = get_company_header(comp_type)
 
-                                # Rozróżnienie urlopu od pracy zdalnej / workation
-                                policy_lower = raw_policy.lower()
-                                is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna', 'workation'])
+                                policy_lower = policy.lower()
+                                is_remote_work = any(term in policy_lower for term in ['home office', 'remote', 'zdalna'])
 
                                 if is_remote_work:
                                     doc_title = "Wniosek o pracę zdalną"
-                                    request_text = f"Proszę o możliwość wykonywania <strong>pracy zdalnej ({policy_pl})</strong> w okresie:"
+                                    request_text = f"Proszę o możliwość wykonywania pracy zdalnej (<strong>{policy}</strong>) w okresie:"
                                     type_prefix = "PracaZdalna"
                                 else:
-                                    doc_title = f"Wniosek – {policy_pl}"
-                                    request_text = f"Proszę o udzielenie:<br><strong>{policy_pl}</strong> w okresie:"
-                                    type_prefix = sanitize_filename(policy_pl)
+                                    doc_title = "Wniosek o urlop"
+                                    request_text = f"Proszę o udzielenie:<br><strong>Urlopu wypoczynkowego ({policy})</strong> w okresie:"
+                                    type_prefix = "Urlop"
 
-                                # Konwersja dat
                                 period_pl = parse_english_period_to_pl(period_str)
                                 date_created_pl = convert_single_date_to_pl(date_created)
 
@@ -286,13 +252,10 @@ if uploaded_file is not None:
                                         .employee-date-table {{ width: 100%; border-collapse: collapse; margin-bottom: 40px; }}
                                         .employee-date-table td {{ vertical-align: top; }}
                                         .employee-info {{ width: 50%; }}
-                                        
                                         .date-info {{ width: 50%; text-align: right; white-space: nowrap; }}
-                                        
                                         .title {{ text-align: center; font-size: 16pt; font-weight: bold; margin: 40px 0 30px 0; text-transform: uppercase; }}
                                         .content-body {{ font-size: 11pt; margin-bottom: 50px; line-height: 1.8; }}
                                         .approval-note-box {{ margin-top: 60px; padding: 15px; border: 1px solid #a0aec0; background-color: #f7fafc; font-size: 10pt; line-height: 1.5; }}
-                                        
                                         .date-range {{ white-space: nowrap; }}
                                     </style>
                                 </head>
@@ -333,11 +296,10 @@ if uploaded_file is not None:
 
                                 pdf_bytes = HTML(string=html_content).write_pdf()
 
-                                # Nazewnictwo plików: [Spółka]_[Typ]_[Nazwisko_Imię]_[YYYY-MM-DD].pdf
                                 clean_person = sanitize_filename(requester)
-                                date_num = extract_numeric_date_for_filename(period_str)
+                                date_short = extract_clean_date_for_filename(period_str)
                                 
-                                filename = f"{comp_type}_{type_prefix}_{clean_person}_{date_num}.pdf"
+                                filename = f"{comp_type}_{type_prefix}_{clean_person}_{date_short}.pdf"
                                 
                                 zip_file.writestr(filename, pdf_bytes)
 
